@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         厦门大学课程表导出助手-ICS(功能修复版)
-// @version      2025-09-15.3
+// @version      2026-02-28
 // @description  基于 yangqian 的原版脚本进行修复和功能增强。解决了因教务系统更新导致的失效问题，支持任意节数连上课程, 支持日程提醒配置。
 // @author       jader (原作者 pydroid)
 // @match        https://jw.xmu.edu.cn/gsapp/sys/wdkbapp/*
@@ -14,11 +14,13 @@
 
     // ================== 配置区域 ==================
     const DEBUG = true;
-    const START_DATE = '2025-09-08'; // !!!【重要】请再次确认此日期为开学第一周的周一!!!
-
     // 【新功能】 在此设置课前提醒，单位为分钟。可以设置多个，例如 [15, 5]
     // 如果不需要提醒，请设置为空数组 []
     const REMINDER_MINUTES = [10];
+    const START_DATE_STORAGE_KEY = 'xmu_ics_start_date_by_semester';
+    const START_DATE_INPUT_ID = 'xmu-ics-start-date-input';
+    const START_DATE_RESET_CLASS = 'xmu-ics-reset-default-btn';
+    const UNKNOWN_SEMESTER_LABEL = '未知学期';
     // ============================================
 
     const periodTimes = [
@@ -32,6 +34,93 @@
 
     const log = (message, ...args) => {
         if (DEBUG) console.log(`[课表助手] ${message}`, ...args);
+    };
+
+    const formatDateForInput = (date) => `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
+    const formatDateForIcs = (date) => `${date.getFullYear()}${(date.getMonth() + 1).toString().padStart(2, '0')}${date.getDate().toString().padStart(2, '0')}`;
+    const isValidDateString = (dateStr) => /^\d{4}-\d{2}-\d{2}$/.test(dateStr) && !Number.isNaN(new Date(`${dateStr}T00:00:00`).getTime());
+    const parseDateInput = (dateStr) => {
+        const [yearStr, monthStr, dayStr] = dateStr.split('-');
+        return new Date(parseInt(yearStr, 10), parseInt(monthStr, 10) - 1, parseInt(dayStr, 10));
+    };
+
+    const getSemesterSelect = () => document.getElementById('myXnxqSelect');
+    const getSemesterLabel = () => {
+        const semesterSelect = getSemesterSelect();
+        const selected = semesterSelect?.selectedOptions?.[0]?.textContent?.trim();
+        return selected || UNKNOWN_SEMESTER_LABEL;
+    };
+    const parseSemesterLabel = (semesterLabel) => {
+        const semesterMatch = semesterLabel.match(/^(\d{4})-(\d{4})学年\s*(春季|秋季|夏季)学期$/);
+        if (!semesterMatch) return null;
+        const [, startYearStr, endYearStr, termType] = semesterMatch;
+        return { startYear: parseInt(startYearStr, 10), endYear: parseInt(endYearStr, 10), termType };
+    };
+    const getFirstMonday = (year, month) => {
+        const firstDay = new Date(year, month - 1, 1);
+        const dayOfWeek = firstDay.getDay();
+        const offset = dayOfWeek === 0 ? 1 : (8 - dayOfWeek) % 7;
+        return new Date(year, month - 1, 1 + offset);
+    };
+    const computeDefaultStartDate = (semesterLabel) => {
+        const semesterInfo = parseSemesterLabel(semesterLabel);
+        if (!semesterInfo) {
+            log(`学期格式无法解析，回退为今天: ${semesterLabel}`);
+            return formatDateForInput(new Date());
+        }
+
+        let year;
+        let month;
+        if (semesterInfo.termType === '春季') {
+            year = semesterInfo.endYear;
+            month = 3;
+        } else if (semesterInfo.termType === '秋季') {
+            year = semesterInfo.startYear;
+            month = 9;
+        } else {
+            year = semesterInfo.endYear;
+            month = 7;
+        }
+        return formatDateForInput(getFirstMonday(year, month));
+    };
+
+    const getStoredDateMap = () => {
+        try {
+            const raw = localStorage.getItem(START_DATE_STORAGE_KEY);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return {};
+            return parsed;
+        } catch (error) {
+            log('读取本地日期配置失败，已忽略。', error);
+            return {};
+        }
+    };
+    const saveStoredDateMap = (dateMap) => {
+        try {
+            localStorage.setItem(START_DATE_STORAGE_KEY, JSON.stringify(dateMap));
+        } catch (error) {
+            log('保存本地日期配置失败，已忽略。', error);
+        }
+    };
+    const getStoredStartDate = (semesterLabel) => {
+        const dateMap = getStoredDateMap();
+        const candidate = dateMap[semesterLabel];
+        return isValidDateString(candidate) ? candidate : null;
+    };
+    const setStoredStartDate = (semesterLabel, startDate) => {
+        if (!semesterLabel || !isValidDateString(startDate)) return;
+        const dateMap = getStoredDateMap();
+        dateMap[semesterLabel] = startDate;
+        saveStoredDateMap(dateMap);
+    };
+    const getPreferredStartDate = (semesterLabel) => getStoredStartDate(semesterLabel) || computeDefaultStartDate(semesterLabel);
+    const updateDateInputForSemester = () => {
+        const dateInput = document.getElementById(START_DATE_INPUT_ID);
+        if (!dateInput) return;
+        const semesterLabel = getSemesterLabel();
+        dateInput.value = getPreferredStartDate(semesterLabel);
+        log(`日期输入框已更新: 学期=${semesterLabel}, 日期=${dateInput.value}`);
     };
 
     const waitUntilElementPresent = (cssLocator, callback) => {
@@ -50,19 +139,80 @@
         const tab = document.getElementById("xsXx")?.firstElementChild;
         if (!tab) { console.error("[课表助手] 无法找到按钮的挂载点 '#xsXx'。"); return; }
         if (tab.querySelector('.export-ics-btn')) return;
+
+        const dateLabel = document.createElement('span');
+        dateLabel.style.marginLeft = '8px';
+        dateLabel.style.marginRight = '6px';
+        dateLabel.textContent = '学期开始日期';
+
+        const dateInput = document.createElement('input');
+        dateInput.type = 'date';
+        dateInput.id = START_DATE_INPUT_ID;
+        dateInput.style.marginRight = '6px';
+
+        const resetButton = document.createElement('a');
+        resetButton.href = 'javascript:void(0);';
+        resetButton.textContent = '恢复默认';
+        resetButton.classList.add('bh-btn-default', 'bh-btn', START_DATE_RESET_CLASS);
+        resetButton.style.marginRight = '8px';
+
+        tab.appendChild(dateLabel);
+        tab.appendChild(dateInput);
+        tab.appendChild(resetButton);
+
         const getButton = document.createElement('a');
         getButton.innerHTML = "导出ICS";
         getButton.classList.add("bh-btn-default", "bh-btn", "export-ics-btn");
         tab.appendChild(getButton);
+
+        updateDateInputForSemester();
+
+        const semesterSelect = getSemesterSelect();
+        if (semesterSelect) {
+            semesterSelect.addEventListener('change', () => {
+                updateDateInputForSemester();
+            });
+        } else {
+            log('未找到学期下拉框 #myXnxqSelect，按未知学期处理。');
+        }
+
+        dateInput.addEventListener('change', () => {
+            if (!isValidDateString(dateInput.value)) {
+                const semesterLabel = getSemesterLabel();
+                dateInput.value = computeDefaultStartDate(semesterLabel);
+                alert(`开始日期格式无效，已恢复为默认值：${dateInput.value}`);
+                return;
+            }
+            setStoredStartDate(getSemesterLabel(), dateInput.value);
+        });
+
+        resetButton.addEventListener('click', () => {
+            const semesterLabel = getSemesterLabel();
+            const defaultDate = computeDefaultStartDate(semesterLabel);
+            dateInput.value = defaultDate;
+            setStoredStartDate(semesterLabel, defaultDate);
+            log(`已恢复默认开始日期: 学期=${semesterLabel}, 日期=${defaultDate}`);
+        });
+
         getButton.addEventListener('click', main);
         log("'导出ICS' 按钮已成功添加到页面。");
     });
 
     function main() {
         log("===== 开始执行课表导出主程序 =====");
+        const semesterLabel = getSemesterLabel();
+        const dateInput = document.getElementById(START_DATE_INPUT_ID);
+        let startDateStr = dateInput?.value?.trim() || '';
+        if (!isValidDateString(startDateStr)) {
+            startDateStr = getPreferredStartDate(semesterLabel);
+            if (dateInput) dateInput.value = startDateStr;
+            alert(`开始日期为空或格式无效，已自动使用：${startDateStr}`);
+        }
+        setStoredStartDate(semesterLabel, startDateStr);
+
         const HEADERS = [
             "BEGIN:VCALENDAR", "METHOD:PUBLISH", "VERSION:2.0",
-            "X-WR-CALNAME:XMU课程表", "X-WR-TIMEZONE:Asia/Shanghai", "CALSCALE:GREGORIAN",
+            `X-WR-CALNAME:XMU课程表(${semesterLabel})`, "X-WR-TIMEZONE:Asia/Shanghai", "CALSCALE:GREGORIAN",
             "BEGIN:VTIMEZONE", "TZID:Asia/Shanghai", "END:VTIMEZONE"
         ];
         const FOOTERS = ["END:VCALENDAR"];
@@ -74,9 +224,9 @@
             return periodTimes[endJc - 1]?.end ? formatTime(periodTimes[endJc - 1].end) : null;
         };
         const getFirstDate = (day, week) => {
-            const startDate = new Date(START_DATE);
+            const startDate = parseDateInput(startDateStr);
             startDate.setDate(startDate.getDate() + (week - 1) * 7 + (day - 1));
-            return `${startDate.getFullYear()}${(startDate.getMonth() + 1).toString().padStart(2, '0')}${startDate.getDate().toString().padStart(2, '0')}`;
+            return formatDateForIcs(startDate);
         };
 
         const courseBlocks = document.querySelectorAll(".arrage");

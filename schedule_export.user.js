@@ -6,7 +6,9 @@
 // @match        https://jw.xmu.edu.cn/gsapp/sys/wdkbapp/*
 // @grant        none
 // @license      MIT License
-// @namespace    https://greasyfork.org/zh-CN/users/1515284-%E4%BA%A6%E7%91%BE
+// @namespace    https://greasyfork.org/zh-CN/users/1515284
+// @homepageURL  https://github.com/yJader/xmu-course-schedule-export
+// @supportURL   https://github.com/yJader/xmu-course-schedule-export/issues
 // ==/UserScript==
 
 (function () {

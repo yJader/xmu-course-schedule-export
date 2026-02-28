@@ -8,6 +8,13 @@
 
 ---
 
+## 相关链接
+
+* GreasyFork 脚本发布页：<https://greasyfork.org/zh-CN/scripts/549592>
+* GitHub 仓库：<https://github.com/yJader/xmu-course-schedule-export>
+
+---
+
 ## 使用说明
 
 1. 安装脚本后，在厦门大学教务系统的“学生课程表”页面，顶部会出现一个【导出ICS】按钮。
